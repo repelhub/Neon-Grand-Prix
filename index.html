@@ -60,7 +60,7 @@
     Cash: $<span id="cashDisplay">0</span> —
     Current Car: <span id="carDisplay">Starter</span>
     <div style="font-size:12px;color:#888;">
-      Controls: A / D or Left / Right to switch lanes. Avoid traffic and reach the finish first.
+      Controls: A / D or Left / Right to switch lanes. W / Up Arrow to accelerate.
     </div>
   </div>
   <div id="shop"></div>
@@ -76,7 +76,6 @@
     const messageDiv = document.getElementById("message");
 
     const lanes = [70, 150, 230, 310];
-    const playerY = 500;
 
     let keys = {};
     window.addEventListener("keydown", e => keys[e.key] = true);
@@ -84,10 +83,10 @@
 
     // Car definitions
     const cars = [
-      { id: "Starter", name: "Street Starter", price: 0,   speed: 4,  color: "#00eaff" },
-      { id: "Sprint",  name: "Neon Sprint",   price: 25_000, speed: 5,  color: "#ffcc00" },
-      { id: "Viper",   name: "Night Viper",   price: 80_000, speed: 6,  color: "#ff55aa" },
-      { id: "LeMans",  name: "Le Mans Phantom", price: 250_000, speed: 7.2, color: "#00ff88" }
+      { id: "Starter", name: "Street Starter", price: 0, speed: 4, accel: 0.12, color: "#00eaff" },
+      { id: "Sprint", name: "Neon Sprint", price: 25000, speed: 5, accel: 0.14, color: "#ffcc00" },
+      { id: "Viper", name: "Night Viper", price: 80000, speed: 6, accel: 0.16, color: "#ff55aa" },
+      { id: "Phantom", name: "Night Phantom", price: 250000, speed: 7.5, accel: 0.18, color: "#00ff88" }
     ];
 
     let ownedCars = ["Starter"];
@@ -96,17 +95,18 @@
 
     let player = {
       laneIndex: 1,
-      progress: 0
+      progress: 0,
+      speed: 0
     };
 
     const aiCars = [
-      { laneIndex: 0, progress: 0, baseSpeed: 3.6 },
-      { laneIndex: 2, progress: 0, baseSpeed: 3.8 },
-      { laneIndex: 3, progress: 0, baseSpeed: 4.0 }
+      { laneIndex: 0, progress: 0, speed: 0, base: 3.6 },
+      { laneIndex: 2, progress: 0, speed: 0, base: 3.8 },
+      { laneIndex: 3, progress: 0, speed: 0, base: 4.0 }
     ];
 
     let traffic = [];
-    let raceLength = 3000; // distance units
+    let raceLength = 3500;
     let running = false;
     let gameOver = false;
     let lastTime = performance.now();
@@ -168,17 +168,20 @@
     }
 
     function resetRace() {
-      const startLane = 1;
-      player.laneIndex = startLane;
+      player.laneIndex = 1;
       player.progress = 0;
-      aiCars[0].laneIndex = 0;
-      aiCars[1].laneIndex = 2;
-      aiCars[2].laneIndex = 3;
-      aiCars.forEach(ai => ai.progress = -Math.random()*200);
+      player.speed = 0;
+
+      aiCars.forEach((ai, i) => {
+        ai.laneIndex = i;
+        ai.progress = 0;
+        ai.speed = 0;
+      });
+
       traffic = [];
       gameOver = false;
       running = true;
-      message("Race started! Finish first to earn more.");
+      message("Race started! Accelerate with W / Up Arrow.");
     }
 
     function message(text) {
@@ -186,7 +189,6 @@
     }
 
     function spawnTraffic() {
-      // random slow cars in random lanes ahead
       const laneIndex = Math.floor(Math.random()*lanes.length);
       traffic.push({
         laneIndex,
@@ -196,10 +198,18 @@
 
     function updateRace(dt) {
       if (!running || gameOver) return;
-      const car = cars.find(c => c.id === selectedCarId) || cars[0];
-      const baseSpeed = car.speed;
 
-      // input for lane
+      const car = cars.find(c => c.id === selectedCarId);
+
+      // ACCELERATION
+      if (keys["w"] || keys["ArrowUp"]) {
+        player.speed += car.accel * dt;
+        if (player.speed > car.speed) player.speed = car.speed;
+      } else {
+        player.speed *= 0.98;
+      }
+
+      // LANE SWITCHING
       if ((keys["a"] || keys["ArrowLeft"]) && player.laneIndex > 0) {
         player.laneIndex--;
         keys["a"] = keys["ArrowLeft"] = false;
@@ -209,50 +219,28 @@
         keys["d"] = keys["ArrowRight"] = false;
       }
 
-      // move forward
-      player.progress += baseSpeed * dt;
+      // MOVE PLAYER
+      player.progress += player.speed * dt;
 
-      // AI movement with slight differences + rubber band
-      aiCars.forEach((ai, idx) => {
-        let targetSpeed = ai.baseSpeed + 0.3*idx;
-        // rubber band: they speed up if far behind, slow if far ahead
-        const diff = player.progress - ai.progress;
-        if (diff > 200) targetSpeed += 1.2;
-        if (diff < -200) targetSpeed -= 1.0;
-        targetSpeed = Math.max(2, targetSpeed);
-        ai.progress += targetSpeed * dt;
-
-        // random lane changes
-        if (Math.random() < 0.005) {
-          const dir = Math.random() < 0.5 ? -1 : 1;
-          const newLane = ai.laneIndex + dir;
-          if (newLane >= 0 && newLane < lanes.length) {
-            ai.laneIndex = newLane;
-          }
-        }
+      // AI MOVEMENT
+      aiCars.forEach(ai => {
+        ai.speed += 0.1 * dt;
+        if (ai.speed > ai.base) ai.speed = ai.base;
+        ai.progress += ai.speed * dt;
       });
 
-      // spawn traffic sometimes
+      // TRAFFIC
       if (Math.random() < 0.03) spawnTraffic();
 
-      // move traffic backwards relative to player
-      traffic.forEach(car => {
-        // they just exist at fixed progress; we compare relative positions
+      traffic.forEach(t => {
+        if (t.laneIndex === player.laneIndex &&
+            Math.abs(t.progress - player.progress) < 50) {
+          player.speed *= 0.4;
+          message("You hit traffic!");
+        }
       });
 
-      // collision with traffic
-      const playerCar = { lane: player.laneIndex, progress: player.progress };
-      for (const t of traffic) {
-        if (t.laneIndex === playerCar.lane &&
-            Math.abs(t.progress - playerCar.progress) < 50) {
-          // crash -> slow hard
-          player.progress -= 80;
-          message("You hit traffic! Lost speed.");
-          break;
-        }
-      }
-
-      // finish line check
+      // FINISH
       if (player.progress >= raceLength || aiCars.some(ai => ai.progress >= raceLength)) {
         running = false;
         gameOver = true;
@@ -261,13 +249,13 @@
     }
 
     function handleFinish() {
-      // determine places by progress
       const racers = [
         { name: "You", progress: player.progress, type: "player" },
         { name: "AI 1", progress: aiCars[0].progress },
         { name: "AI 2", progress: aiCars[1].progress },
         { name: "AI 3", progress: aiCars[2].progress }
       ];
+
       racers.sort((a,b) => b.progress - a.progress);
       const place = racers.findIndex(r => r.type === "player") + 1;
 
@@ -281,17 +269,19 @@
       saveState();
       updateUI();
 
-      message(`Race finished! You placed #${place} and earned $${reward.toLocaleString()}. Press R to race again.`);
+      message(`Finished #${place}! Earned $${reward.toLocaleString()}. Press R to race again.`);
     }
 
     function draw() {
       ctx.clearRect(0,0,canvas.width,canvas.height);
 
-      // draw road background
+      const scrollY = 300 - (player.progress * 0.05);
+
+      // ROAD
       ctx.fillStyle = "#050509";
       ctx.fillRect(40,0,canvas.width-80,canvas.height);
 
-      // lane lines
+      // LANE LINES
       ctx.strokeStyle = "#222237";
       ctx.lineWidth = 2;
       lanes.forEach(x => {
@@ -301,66 +291,50 @@
         ctx.stroke();
       });
 
-      // finish line as a band ahead
-      const relFinishY = 100 - (raceLength - player.progress)*0.05;
-      if (relFinishY < canvas.height && relFinishY > -50) {
+      // FINISH LINE
+      const finishY = scrollY + raceLength * 0.05;
+      if (finishY > -50 && finishY < canvas.height+50) {
         ctx.fillStyle="#ffffff22";
         for (let i=0;i<10;i++) {
           const xStart = 40 + (i%2)*40;
-          ctx.fillRect(xStart, relFinishY, 40, 10);
+          ctx.fillRect(xStart, finishY, 40, 10);
         }
       }
 
-      // traffic draw
+      // TRAFFIC
       traffic.forEach(t => {
-        const rel = 100 + (t.progress - player.progress)*0.05;
-        if (rel > -60 && rel < canvas.height+40) {
+        const y = scrollY + t.progress * 0.05;
+        if (y > -60 && y < canvas.height+40) {
           const x = lanes[t.laneIndex];
           ctx.fillStyle="#ff4444";
-          ctx.fillRect(x-18, rel-30, 36, 50);
-          ctx.fillStyle="#330000";
-          ctx.fillRect(x-12, rel-24, 24, 38);
+          ctx.fillRect(x-18, y-30, 36, 50);
         }
       });
 
-      // AI cars
+      // AI CARS
       aiCars.forEach((ai, idx) => {
-        const rel = 100 + (ai.progress - player.progress)*0.05;
-        if (rel > -60 && rel < canvas.height+40) {
+        const y = scrollY + ai.progress * 0.05;
+        if (y > -60 && y < canvas.height+40) {
           const x = lanes[ai.laneIndex];
-          ctx.fillStyle = ["#ff66aa","#ffaa44","#aa66ff"][idx] || "#ff66aa";
-          ctx.fillRect(x-18, rel-30, 36, 50);
-          ctx.fillStyle="#220011";
-          ctx.fillRect(x-12, rel-24, 24, 38);
+          ctx.fillStyle = ["#ff66aa","#ffaa44","#aa66ff"][idx];
+          ctx.fillRect(x-18, y-30, 36, 50);
         }
       });
 
-      // player car
+      // PLAYER CAR
       const px = lanes[player.laneIndex];
-      const py = playerY;
-      const selectedCar = cars.find(c => c.id === selectedCarId) || cars[0];
+      const py = scrollY + player.progress * 0.05;
+      const selectedCar = cars.find(c => c.id === selectedCarId);
       ctx.fillStyle = selectedCar.color;
       ctx.fillRect(px-18, py-30, 36, 50);
-      ctx.fillStyle = "#00111a";
-      ctx.fillRect(px-12, py-24, 24, 38);
 
       if (!running && !gameOver) {
-        ctx.fillStyle = "rgba(0,0,0,0.6)";
+        ctx.fillStyle="rgba(0,0,0,0.6)";
         ctx.fillRect(0,0,canvas.width,canvas.height);
         ctx.fillStyle="#00eaff";
         ctx.font="18px Segoe UI";
         ctx.textAlign="center";
         ctx.fillText("Press R to start a race", canvas.width/2, canvas.height/2);
-        ctx.textAlign="start";
-      }
-
-      if (gameOver) {
-        ctx.fillStyle="rgba(0,0,0,0.5)";
-        ctx.fillRect(0,0,canvas.width,canvas.height);
-        ctx.fillStyle="#ffcc00";
-        ctx.font="16px Segoe UI";
-        ctx.textAlign="center";
-        ctx.fillText("Press R to race again", canvas.width/2, canvas.height/2 + 40);
         ctx.textAlign="start";
       }
     }
@@ -374,7 +348,7 @@
     }
 
     window.addEventListener("keydown", e => {
-      if (e.key === "r" || e.key === "R") {
+      if ((e.key === "r" || e.key === "R") && !running) {
         resetRace();
       }
     });
