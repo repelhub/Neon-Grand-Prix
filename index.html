@@ -6,7 +6,7 @@
   <style>
     body {
       margin: 0;
-      background: radial-gradient(circle at top, #120820, #020104);
+      background: #020308;
       font-family: "Segoe UI", sans-serif;
       color: #fff;
       overflow: hidden;
@@ -64,7 +64,7 @@
     </div>
   </div>
   <div id="shop"></div>
-  <canvas id="gameCanvas" width="400" height="600"></canvas>
+  <canvas id="gameCanvas" width="500" height="700"></canvas>
   <div id="message"></div>
 
   <script>
@@ -75,7 +75,8 @@
     const shopDiv = document.getElementById("shop");
     const messageDiv = document.getElementById("message");
 
-    const lanes = [70, 150, 230, 310];
+    // "Virtual" lane centers in world space (-1..1 range), mapped to perspective road
+    const laneOffsets = [-0.45, -0.15, 0.15, 0.45];
 
     let keys = {};
     window.addEventListener("keydown", e => keys[e.key] = true);
@@ -83,10 +84,10 @@
 
     // Car definitions
     const cars = [
-      { id: "Starter", name: "Street Starter", price: 0, speed: 4, accel: 0.12, color: "#00eaff" },
-      { id: "Sprint", name: "Neon Sprint", price: 25000, speed: 5, accel: 0.14, color: "#ffcc00" },
-      { id: "Viper", name: "Night Viper", price: 80000, speed: 6, accel: 0.16, color: "#ff55aa" },
-      { id: "Phantom", name: "Night Phantom", price: 250000, speed: 7.5, accel: 0.18, color: "#00ff88" }
+      { id: "Starter", name: "Street Starter",   price: 0,      speed: 4,   accel: 0.12, color: "#00eaff" },
+      { id: "Sprint",  name: "Neon Sprint",      price: 25000,  speed: 5,   accel: 0.14, color: "#ffcc00" },
+      { id: "Viper",   name: "Night Viper",      price: 80000,  speed: 6,   accel: 0.16, color: "#ff55aa" },
+      { id: "Phantom", name: "Night Phantom",    price: 250000, speed: 7.5, accel: 0.18, color: "#00ff88" }
     ];
 
     let ownedCars = ["Starter"];
@@ -106,11 +107,18 @@
     ];
 
     let traffic = [];
-    let raceLength = 3500;
+    const raceLength = 3500;
+
     let running = false;
     let gameOver = false;
+    let finishedThisRace = false;
     let lastTime = performance.now();
 
+    // lightning effect
+    let lightningTimer = 0;
+    let lightningFlash = 0;
+
+    // ---------- Save / Load ----------
     function loadState() {
       const storedCash = localStorage.getItem("ngp_cash");
       const storedOwned = localStorage.getItem("ngp_ownedCars");
@@ -136,6 +144,7 @@
       buildShop();
     }
 
+    // ---------- Shop ----------
     function buildShop() {
       shopDiv.innerHTML = "";
       cars.forEach(car => {
@@ -167,6 +176,7 @@
       updateUI();
     }
 
+    // ---------- Race control ----------
     function resetRace() {
       player.laneIndex = 1;
       player.progress = 0;
@@ -181,6 +191,7 @@
       traffic = [];
       gameOver = false;
       running = true;
+      finishedThisRace = false;
       message("Race started! Accelerate with W / Up Arrow.");
     }
 
@@ -189,17 +200,17 @@
     }
 
     function spawnTraffic() {
-      const laneIndex = Math.floor(Math.random()*lanes.length);
+      const laneIndex = Math.floor(Math.random() * laneOffsets.length);
       traffic.push({
         laneIndex,
-        progress: player.progress + 200 + Math.random()*400
+        progress: player.progress + 200 + Math.random() * 400
       });
     }
 
     function updateRace(dt) {
       if (!running || gameOver) return;
 
-      const car = cars.find(c => c.id === selectedCarId);
+      const car = cars.find(c => c.id === selectedCarId) || cars[0];
 
       // ACCELERATION
       if (keys["w"] || keys["ArrowUp"]) {
@@ -209,46 +220,66 @@
         player.speed *= 0.98;
       }
 
-      // LANE SWITCHING
+      // LANE SWITCH
       if ((keys["a"] || keys["ArrowLeft"]) && player.laneIndex > 0) {
         player.laneIndex--;
         keys["a"] = keys["ArrowLeft"] = false;
       }
-      if ((keys["d"] || keys["ArrowRight"]) && player.laneIndex < lanes.length-1) {
+      if ((keys["d"] || keys["ArrowRight"]) && player.laneIndex < laneOffsets.length-1) {
         player.laneIndex++;
         keys["d"] = keys["ArrowRight"] = false;
       }
 
       // MOVE PLAYER
       player.progress += player.speed * dt;
+      if (player.progress > raceLength) player.progress = raceLength;
 
       // AI MOVEMENT
       aiCars.forEach(ai => {
         ai.speed += 0.1 * dt;
         if (ai.speed > ai.base) ai.speed = ai.base;
         ai.progress += ai.speed * dt;
+        if (ai.progress > raceLength) ai.progress = raceLength;
       });
 
-      // TRAFFIC
+      // TRAFFIC SPAWN & CLEANUP
       if (Math.random() < 0.03) spawnTraffic();
+      traffic = traffic.filter(t => t.progress > player.progress - 300);
 
+      // TRAFFIC COLLISION
       traffic.forEach(t => {
         if (t.laneIndex === player.laneIndex &&
-            Math.abs(t.progress - player.progress) < 50) {
+            Math.abs(t.progress - player.progress) < 60) {
           player.speed *= 0.4;
           message("You hit traffic!");
         }
       });
 
-      // FINISH
-      if (player.progress >= raceLength || aiCars.some(ai => ai.progress >= raceLength)) {
+      // FINISH CHECK (only once)
+      const someoneFinished =
+        player.progress >= raceLength ||
+        aiCars.some(ai => ai.progress >= raceLength);
+
+      if (someoneFinished && !finishedThisRace) {
+        finishedThisRace = true;
         running = false;
         gameOver = true;
         handleFinish();
       }
+
+      // lightning timer
+      lightningTimer -= dt;
+      if (lightningTimer <= 0 && Math.random() < 0.01) {
+        lightningTimer = 300 + Math.random() * 300;
+        lightningFlash = 10;
+      }
+      if (lightningFlash > 0) lightningFlash -= dt;
     }
 
     function handleFinish() {
+      player.progress = Math.min(player.progress, raceLength);
+      aiCars.forEach(ai => ai.progress = Math.min(ai.progress, raceLength));
+
       const racers = [
         { name: "You", progress: player.progress, type: "player" },
         { name: "AI 1", progress: aiCars[0].progress },
@@ -257,7 +288,8 @@
       ];
 
       racers.sort((a,b) => b.progress - a.progress);
-      const place = racers.findIndex(r => r.type === "player") + 1;
+      const playerIndex = racers.findIndex(r => r.type === "player");
+      const place = playerIndex === -1 ? 4 : playerIndex + 1;
 
       let reward = 0;
       if (place === 1) reward = 15000;
@@ -272,61 +304,209 @@
       message(`Finished #${place}! Earned $${reward.toLocaleString()}. Press R to race again.`);
     }
 
-    function draw() {
-      ctx.clearRect(0,0,canvas.width,canvas.height);
+    // ---------- Helpers: perspective + drawing ----------
+    function screenFromWorld(laneIndex, worldZ) {
+      // worldZ: how far ahead (based on progress)
+      // map Z to 0..1 (0 near, 1 far)
+      const maxZ = 400; // visible range
+      let zNorm = worldZ / maxZ;
+      if (zNorm < 0) zNorm = 0;
+      if (zNorm > 1) zNorm = 1;
 
-      const scrollY = 300 - (player.progress * 0.05);
+      // road perspective
+      const roadBottomWidth = canvas.width * 0.8;
+      const roadTopWidth = canvas.width * 0.2;
+      const roadCenterX = canvas.width / 2;
 
-      // ROAD
-      ctx.fillStyle = "#050509";
-      ctx.fillRect(40,0,canvas.width-80,canvas.height);
+      const roadWidth = roadTopWidth + (roadBottomWidth - roadTopWidth) * (1 - zNorm);
+      const laneWorldX = laneOffsets[laneIndex] * (roadWidth * 0.5);
+      const x = roadCenterX + laneWorldX;
 
-      // LANE LINES
-      ctx.strokeStyle = "#222237";
-      ctx.lineWidth = 2;
-      lanes.forEach(x => {
+      const roadBottomY = canvas.height * 0.9;
+      const roadTopY = canvas.height * 0.3;
+      const y = roadTopY + (roadBottomY - roadTopY) * (1 - zNorm);
+
+      const scale = 0.4 + 0.8 * (1 - zNorm); // cars larger near bottom
+
+      return { x, y, scale };
+    }
+
+    function drawBackground() {
+      // storm sky gradient
+      const skyGrad = ctx.createLinearGradient(0,0,0,canvas.height);
+      skyGrad.addColorStop(0, "#050815");
+      skyGrad.addColorStop(0.4, "#040412");
+      skyGrad.addColorStop(1, "#020208");
+      ctx.fillStyle = skyGrad;
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+
+      // city silhouette
+      ctx.fillStyle = "#050819";
+      const horizonY = canvas.height * 0.32;
+      for (let i=0;i<16;i++) {
+        const w = 40 + Math.random()*40;
+        const h = 40 + Math.random()*80;
+        const x = i*(canvas.width/16) + Math.random()*10 - 5;
+        ctx.fillRect(x, horizonY - h, w, h);
+      }
+
+      // lightning flash overlay
+      if (lightningFlash > 0) {
+        const alpha = Math.max(0, Math.min(0.5, lightningFlash / 10));
+        ctx.fillStyle = `rgba(180,220,255,${alpha})`;
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+
+        // lightning bolt
+        ctx.strokeStyle = `rgba(220,240,255,${alpha})`;
+        ctx.lineWidth = 2;
+        const boltX = canvas.width * (0.2 + Math.random()*0.6);
         ctx.beginPath();
-        ctx.moveTo(x,0);
-        ctx.lineTo(x,canvas.height);
+        ctx.moveTo(boltX, 0);
+        ctx.lineTo(boltX + 15, horizonY * 0.4);
+        ctx.lineTo(boltX - 10, horizonY * 0.8);
+        ctx.lineTo(boltX + 5, horizonY);
+        ctx.stroke();
+      }
+    }
+
+    function drawRoad() {
+      const bottomY = canvas.height * 0.9;
+      const topY = canvas.height * 0.3;
+      const bottomWidth = canvas.width * 0.8;
+      const topWidth = canvas.width * 0.2;
+      const cx = canvas.width / 2;
+
+      ctx.fillStyle = "#050509";
+      ctx.beginPath();
+      ctx.moveTo(cx - bottomWidth/2, bottomY);
+      ctx.lineTo(cx + bottomWidth/2, bottomY);
+      ctx.lineTo(cx + topWidth/2, topY);
+      ctx.lineTo(cx - topWidth/2, topY);
+      ctx.closePath();
+      ctx.fill();
+
+      // lane lines as perspective
+      ctx.strokeStyle = "#202533";
+      ctx.lineWidth = 2;
+      laneOffsets.forEach(offset => {
+        ctx.beginPath();
+        const xBottom = cx + offset * (bottomWidth*0.5);
+        const xTop = cx + offset * (topWidth*0.5);
+        ctx.moveTo(xBottom, bottomY);
+        ctx.lineTo(xTop, topY);
         ctx.stroke();
       });
 
-      // FINISH LINE
-      const finishY = scrollY + raceLength * 0.05;
-      if (finishY > -50 && finishY < canvas.height+50) {
-        ctx.fillStyle="#ffffff22";
-        for (let i=0;i<10;i++) {
-          const xStart = 40 + (i%2)*40;
-          ctx.fillRect(xStart, finishY, 40, 10);
-        }
+      // center dashed line
+      ctx.strokeStyle = "#44495a";
+      ctx.setLineDash([12, 12]);
+      ctx.beginPath();
+      ctx.moveTo(cx, bottomY);
+      ctx.lineTo(cx, topY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    function drawCarShape(x, y, scale, color, isPlayer=false) {
+      const baseWidth = 40 * scale;
+      const baseHeight = 60 * scale;
+
+      ctx.save();
+      ctx.translate(x, y);
+
+      // body
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(-baseWidth/2, baseHeight/2);
+      ctx.lineTo(baseWidth/2, baseHeight/2);
+      ctx.lineTo(baseWidth*0.4, -baseHeight/2);
+      ctx.lineTo(-baseWidth*0.4, -baseHeight/2);
+      ctx.closePath();
+      ctx.fill();
+
+      // rear window
+      ctx.fillStyle = "#050b10";
+      ctx.beginPath();
+      ctx.moveTo(-baseWidth*0.25, baseHeight*0.1);
+      ctx.lineTo(baseWidth*0.25, baseHeight*0.1);
+      ctx.lineTo(baseWidth*0.18, -baseHeight*0.2);
+      ctx.lineTo(-baseWidth*0.18, -baseHeight*0.2);
+      ctx.closePath();
+      ctx.fill();
+
+      // tail lights
+      ctx.fillStyle = "#ff3355";
+      ctx.fillRect(-baseWidth/2 + 3, baseHeight/2 - 6, 8*scale, 4*scale);
+      ctx.fillRect(baseWidth/2 - 3 - 8*scale, baseHeight/2 - 6, 8*scale, 4*scale);
+
+      if (isPlayer) {
+        // glow
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(-baseWidth/2, baseHeight/2 - 4, baseWidth, 4);
       }
 
-      // TRAFFIC
+      ctx.restore();
+    }
+
+    function drawFinishLine(scrollOffset) {
+      const maxZ = 400;
+      const zAhead = raceLength - player.progress;
+      const relativeZ = Math.max(0, Math.min(maxZ, zAhead));
+      const t = 1 - relativeZ / maxZ; // 0 far, 1 near
+      if (t <= 0 || t >= 1.1) return;
+
+      const bottomY = canvas.height * 0.9;
+      const topY = canvas.height * 0.3;
+      const y = topY + (bottomY - topY) * t;
+
+      const cx = canvas.width / 2;
+      const bottomWidth = canvas.width * 0.8;
+      const topWidth = canvas.width * 0.2;
+      const roadWidth = topWidth + (bottomWidth - topWidth) * t;
+
+      const stripeW = roadWidth / 10;
+      for (let i = 0; i < 10; i++) {
+        ctx.fillStyle = i % 2 === 0 ? "#ffffff" : "#000000";
+        const x = cx - roadWidth/2 + i * stripeW;
+        ctx.fillRect(x, y-4, stripeW, 8);
+      }
+    }
+
+    function draw() {
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+
+      drawBackground();
+      drawRoad();
+      drawFinishLine();
+
+      // cars and traffic in perspective
+      // Z distance relative to player
+      const maxVisible = 400;
+
+      // traffic
       traffic.forEach(t => {
-        const y = scrollY + t.progress * 0.05;
-        if (y > -60 && y < canvas.height+40) {
-          const x = lanes[t.laneIndex];
-          ctx.fillStyle="#ff4444";
-          ctx.fillRect(x-18, y-30, 36, 50);
+        const dz = t.progress - player.progress;
+        if (dz > -20 && dz < maxVisible) {
+          const s = screenFromWorld(t.laneIndex, dz);
+          drawCarShape(s.x, s.y, s.scale*0.8, "#ff4444", false);
         }
       });
 
-      // AI CARS
+      // AI cars
       aiCars.forEach((ai, idx) => {
-        const y = scrollY + ai.progress * 0.05;
-        if (y > -60 && y < canvas.height+40) {
-          const x = lanes[ai.laneIndex];
-          ctx.fillStyle = ["#ff66aa","#ffaa44","#aa66ff"][idx];
-          ctx.fillRect(x-18, y-30, 36, 50);
+        const dz = ai.progress - player.progress;
+        if (dz > -20 && dz < maxVisible) {
+          const s = screenFromWorld(ai.laneIndex, dz);
+          const colors = ["#ff66aa", "#ffaa44", "#aa66ff"];
+          drawCarShape(s.x, s.y, s.scale, colors[idx], false);
         }
       });
 
-      // PLAYER CAR
-      const px = lanes[player.laneIndex];
-      const py = scrollY + player.progress * 0.05;
-      const selectedCar = cars.find(c => c.id === selectedCarId);
-      ctx.fillStyle = selectedCar.color;
-      ctx.fillRect(px-18, py-30, 36, 50);
+      // player (always near bottom, slightly in front)
+      const playerScreen = screenFromWorld(player.laneIndex, 20); // small dz so near bottom
+      const selectedCar = cars.find(c => c.id === selectedCarId) || cars[0];
+      drawCarShape(playerScreen.x, playerScreen.y, 1.2, selectedCar.color, true);
 
       if (!running && !gameOver) {
         ctx.fillStyle="rgba(0,0,0,0.6)";
@@ -337,10 +517,21 @@
         ctx.fillText("Press R to start a race", canvas.width/2, canvas.height/2);
         ctx.textAlign="start";
       }
+
+      if (gameOver) {
+        ctx.fillStyle="rgba(0,0,0,0.3)";
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+        ctx.fillStyle="#ffcc00";
+        ctx.font="14px Segoe UI";
+        ctx.textAlign="center";
+        ctx.fillText("Press R to race again", canvas.width/2, canvas.height - 25);
+        ctx.textAlign="start";
+      }
     }
 
+    // ---------- Loop ----------
     function loop(now) {
-      const dt = (now - lastTime)/16.67;
+      const dt = Math.max(0.5, Math.min(3, (now - lastTime)/16.67));
       lastTime = now;
       updateRace(dt);
       draw();
